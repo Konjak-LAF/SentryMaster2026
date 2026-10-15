@@ -1,5 +1,33 @@
 /sentry_planner_node:
-  ros__parameters:    
-    test_param: 1
+  ros__parameters:
+    # 话题
+    odom_topic: "/odin1/odometry_highfreq"
+    chassis_data_topic: "/chassis_data"
+    nav_command_topic: "/sentry/nav_command"
+    velocity_command_topic: "/sentry/velocity_command"
 
-    
+    # 坐标系
+    global_frame: "odom"
+    robot_frame: "vehicle"
+
+    # 控制周期与超时
+    control_rate_hz: 50.0
+    command_timeout: 1.0        # s：决策指令超时则停车
+
+    # 位置/朝向控制（长度 m，速度 mm/s，角速度 deg/s）
+    arrive_radius: 0.15         # m：小于该距离不再平移
+    pos_kp: 1.5                 # 1/s
+    yaw_kp: 2.0                 # 1/s
+
+    # 输出限幅
+    max_vx: 1000.0              # mm/s
+    max_vy: 1000.0              # mm/s
+    max_wz: 360.0               # deg/s
+
+    # 卡住检测
+    stuck_cmd_speed: 100.0      # mm/s
+    stuck_chassis_speed: 20.0   # mm/s
+    stuck_timeout: 2.0          # s
+
+    # 里程计看门狗
+    odom_timeout: 0.5           # s：里程计中断则停车

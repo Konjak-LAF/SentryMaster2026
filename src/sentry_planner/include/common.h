@@ -1,7 +1,14 @@
 #pragma once
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <numbers>
+#include <string>
+#include <vector>
+
 #include <rclcpp/rclcpp.hpp>
 
-#include <tf2/utils.h>
+#include <tf2/utils.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_ros/create_timer_ros.hpp>
@@ -15,6 +22,12 @@ using OdomMsg = nav_msgs::msg::Odometry;
 
 #include "rm_msgs/msg/chassis_data.hpp"
 using ChassisDataMsg = rm_msgs::msg::ChassisData;
+
+#include "rm_msgs/msg/nav_command.hpp"
+using NavCommandMsg = rm_msgs::msg::NavCommand;
+
+#include "rm_msgs/msg/velocity_command.hpp"
+using VelocityCommandMsg = rm_msgs::msg::VelocityCommand;
 
 inline void info_log() {std::cout << "\33[0m" << std::endl;}
 // 发布绿色信息
@@ -32,8 +45,14 @@ void error_log(T element, Args... args) {
     error_log(args...);         
 }
 
-enum SentryPosture{
-    ATTACK = 1,
-    DEFENSE = 2,
-    MOVE = 3
-};
+// 打印本次启动实际生效的参数（预检录用：确认 yaml 是否传递成功）
+inline void log_parameters(rclcpp::Node *node, const std::vector<std::string> &names){
+    for(const auto &name : names){
+        if(!node->has_parameter(name)){
+            error_log("[param]", node->get_name(), name, "is not declared!");
+            continue;
+        }
+        info_log("[param]", node->get_name(), name, "=",
+                 node->get_parameter(name).value_to_string());
+    }
+}
