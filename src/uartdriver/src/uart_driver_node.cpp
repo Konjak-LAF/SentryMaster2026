@@ -1,4 +1,6 @@
 #include "uart_driver_node.h"
+#include <algorithm>
+#include <chrono>
 
 UARTDriverNode::UARTDriverNode(std::string name) : Node(name){
     init_node();
@@ -6,12 +8,12 @@ UARTDriverNode::UARTDriverNode(std::string name) : Node(name){
 }
 
 void UARTDriverNode::init_node(){
-    // 初始化串口
+    // 串口参数
     declare_parameter("serial_number", "");
-    std::string serial_number = get_parameter("serial_number").as_string();
+    serial_number_filter = get_parameter("serial_number").as_string();
 
     declare_parameter("serial_name", "");
-    std::string serial_name_pre = get_parameter("serial_name").as_string();
+    serial_name_fallback = get_parameter("serial_name").as_string();
 
     declare_parameter("baud_rate", 0);
     baud_rate = get_parameter("baud_rate").as_int();
@@ -22,40 +24,122 @@ void UARTDriverNode::init_node(){
     declare_parameter("possible_ids", std::vector<int>());
     auto int_ids = get_parameter("possible_ids").as_integer_array();
 
-    // info_log(int_ids.size());
+    // 发送链路参数
+    declare_parameter("velocity_command_topic", "/sentry/velocity_command");
+    std::string velocity_topic = get_parameter("velocity_command_topic").as_string();
+
+    declare_parameter("posture_command_topic", "/sentry/posture_command");
+    std::string posture_topic = get_parameter("posture_command_topic").as_string();
+
+    declare_parameter("send_rate_hz", 50.0);
+    double send_rate_hz = get_parameter("send_rate_hz").as_double();
+
+    declare_parameter("velocity_timeout", 0.2);
+    double velocity_timeout = get_parameter("velocity_timeout").as_double();
+
+    declare_parameter("posture_timeout", 1.0);
+    double posture_timeout = get_parameter("posture_timeout").as_double();
+
+    declare_parameter("default_posture", 3);
+    int default_posture = get_parameter("default_posture").as_int();
+
+    log_parameters(this, {"serial_number", "serial_name", "baud_rate", "read_buffer_size",
+                          "possible_ids", "velocity_command_topic", "posture_command_topic",
+                          "send_rate_hz", "velocity_timeout", "posture_timeout",
+                          "default_posture"});
+
+    if(read_buffer_size < 32){
+        error_log("read_buffer_size", read_buffer_size, "is too small, use 60 instead");
+        read_buffer_size = 60;
+    }
+    if(send_rate_hz <= 0.0){
+        error_log("send_rate_hz", send_rate_hz, "is invalid, use 50.0 instead");
+        send_rate_hz = 50.0;
+    }
+    if(velocity_timeout <= 0.0){
+        error_log("velocity_timeout", velocity_timeout, "is invalid, use 0.2 instead");
+        velocity_timeout = 0.2;
+    }
+    if(posture_timeout <= 0.0){
+        error_log("posture_timeout", posture_timeout, "is invalid, use 1.0 instead");
+        posture_timeout = 1.0;
+    }
+
     for (auto int_id : int_ids){
         uint8_t id = static_cast<uint8_t>(int_id);
         possible_ids.push_back(id);
         // info_log((int)id);
     }
 
-    try {
-        bool is_find_serial_number = false;
-        std::vector<serial::PortInfo> devices_found = serial::list_ports();
-        for (const auto& port : devices_found) {
-            if (port.hardware_id.find(serial_number) != std::string::npos) {
-                serial_name = port.port;
-                is_find_serial_number = true;
-                info_log("match port name: ", serial_name);
-                break;
-            }
-        }
-        if (!is_find_serial_number){
-            serial_name = serial_name_pre;
-        }
-
-        serial_port = std::make_shared<serial::Serial>(serial_name, baud_rate, serial::Timeout::simpleTimeout(1000));
-        if (!serial_port->isOpen()) {
-            serial_port->open();
-        }
-        is_serial_normal = true;
-        info_log("open ", serial_name, "in ", baud_rate);
-        uart_transfer = std::make_shared<Transfer>(this, serial_port);
-        read_thread = std::thread(&UARTDriverNode::read_from_port, this);
-    } catch (const std::exception& ex) {
-        error_log("Error creating serial port: ", serial_number, ex.what());
-        throw ex;
+    // 打开串口失败不致命：读线程会周期性重连，保证无硬件时节点仍能启动
+    if(!try_open_serial()){
+        error_log("failed to open serial port, will keep retrying in background");
     }
+
+    TransferConfig transfer_config;
+    transfer_config.velocity_timeout = velocity_timeout;
+    transfer_config.posture_timeout = posture_timeout;
+    transfer_config.default_posture = static_cast<uint8_t>(default_posture);
+
+    uart_transfer = std::make_shared<Transfer>(this, serial_port, velocity_topic, posture_topic,
+                                               transfer_config);
+    read_thread = std::thread(&UARTDriverNode::read_from_port, this);
+    start_send_timer(send_rate_hz);
+
+    info_log("serial", serial_name, "baud_rate", baud_rate,
+             "send_rate_hz", send_rate_hz);
+}
+
+bool UARTDriverNode::try_open_serial(){
+    std::string port_name = serial_name_fallback;
+
+    // serial_number_filter 为空白串时直接使用 yaml 中写死的端口名，避免误匹配其它设备
+    const bool has_serial_number =
+        serial_number_filter.find_first_not_of(" \t\n") != std::string::npos;
+    if(has_serial_number){
+        try{
+            for (const auto &port : serial::list_ports()) {
+                if (port.hardware_id.find(serial_number_filter) != std::string::npos) {
+                    port_name = port.port;
+                    info_log("match port name: ", port_name);
+                    break;
+                }
+            }
+        }catch (const std::exception &ex){
+            error_log("failed to list serial ports: ", ex.what());
+        }
+    }
+
+    if(port_name.empty()){
+        error_log("no serial port name configured (serial_name is empty)");
+        return false;
+    }
+
+    try{
+        auto port = std::make_shared<serial::Serial>(
+            port_name, baud_rate, serial::Timeout::simpleTimeout(1000));
+        if(!port->isOpen()){
+            port->open();
+        }
+        serial_port = port;
+        serial_name = port_name;
+        is_serial_normal = serial_port->isOpen();
+        if(is_serial_normal){
+            info_log("open", serial_name, "in", baud_rate);
+        }
+        return is_serial_normal;
+    }catch (const std::exception &ex){
+        serial_port = nullptr;
+        is_serial_normal = false;
+        error_log("Error creating serial port:", port_name, ex.what());
+        return false;
+    }
+}
+
+void UARTDriverNode::start_send_timer(double send_rate_hz){
+    send_timer = create_wall_timer(
+        std::chrono::duration<double>(1.0 / send_rate_hz),
+        [this](){ uart_transfer->send_chassis_control(); });
 }
 
 void UARTDriverNode::read_from_port() {
@@ -66,12 +150,15 @@ void UARTDriverNode::read_from_port() {
     int read_data_size = 0;
 
     while (rclcpp::ok()) {
-        try {
-            if (!is_serial_normal) {
-                rclcpp::sleep_for(std::chrono::milliseconds(10));
-                continue;
+        // 串口未就绪：周期性重连（单次尝试，失败就等下一轮，不做递归重试）
+        if (!is_serial_normal) {
+            if(!reopen_port()){
+                rclcpp::sleep_for(std::chrono::seconds(2));
             }
+            continue;
+        }
 
+        try {
             serial_port->read(buffer, 1);
             if (buffer[0] == serial_info_start) {
                 read_data_size = 1;
@@ -115,7 +202,6 @@ void UARTDriverNode::read_from_port() {
                 no_serial_data = 0;
                 is_serial_normal = false;
                 serial_port->close();
-                reopen_port();
             }
         } catch (const std::exception &ex) {
             error_log("Error while receiving data: ", ex.what());
@@ -123,25 +209,24 @@ void UARTDriverNode::read_from_port() {
             if (serial_port && serial_port->isOpen()) {
                 serial_port->close();
             }
-            reopen_port();
         }
     }
 }
 
-void UARTDriverNode::reopen_port(){
-    error_log("Attempting to reopen port");
-    try {
-        std::string cmd = "sudo chmod 666 " + serial_name + " 2>/dev/null";
-        int ret = system(cmd.c_str());
-
-        serial_port->open();
-        is_serial_normal = true;
-        info_log("Successfully reopened port");
-    } catch (const std::exception& ex) {
-        error_log("Error while reopening port: ", ex.what());
-        if (rclcpp::ok()) {
-            rclcpp::sleep_for(std::chrono::seconds(1));
-            reopen_port();
+bool UARTDriverNode::reopen_port(){
+    if (serial_port && serial_port->isOpen()) {
+        try{
+            serial_port->close();
+        }catch (const std::exception &ex){
+            error_log("failed to close serial port: ", ex.what());
         }
     }
+    serial_port = nullptr;
+
+    if(!try_open_serial()){
+        error_log("Attempting to reopen", serial_name, "failed, retry later");
+        return false;
+    }
+    info_log("Successfully reopened", serial_name);
+    return true;
 }

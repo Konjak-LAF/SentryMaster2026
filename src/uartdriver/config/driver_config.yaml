@@ -1,7 +1,17 @@
 /uart_driver_node:
   ros__parameters:
+    # 串口
     serial_name: "/dev/ttyACM0"
+    # USB 序列号（空白表示直接使用 serial_name，不按序列号匹配）
     serial_number: " "
     baud_rate: 1000000
     read_buffer_size: 60
-    possible_ids: [17, 22]
+    possible_ids: [17, 22]          # 0x11 裁判系统包 / 0x16 底盘数据包
+
+    # 发送链路
+    velocity_command_topic: "/sentry/velocity_command"
+    posture_command_topic: "/sentry/posture_command"
+    send_rate_hz: 50.0              # 0x20 底盘控制包发送频率
+    velocity_timeout: 0.2           # s：速度指令超时 -> 发零速（看门狗）
+    posture_timeout: 1.0            # s：姿态指令超时 -> 回到 default_posture
+    default_posture: 3              # 未收到姿态指令时使用的姿态（3 移动姿态）
