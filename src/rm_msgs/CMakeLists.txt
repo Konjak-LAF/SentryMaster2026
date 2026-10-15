@@ -9,6 +9,9 @@ find_package(rosidl_default_generators REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ChassisData.msg"
   "msg/RefereeData.msg"
+  "msg/NavCommand.msg"
+  "msg/VelocityCommand.msg"
+  "msg/PostureCommand.msg"
 
   DEPENDENCIES
     std_msgs
