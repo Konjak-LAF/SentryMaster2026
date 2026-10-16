@@ -1,0 +1,1 @@
+{"resolution":0.05,"origin":[0.9,0.55],"width":323,"height":276,"frame":"odom","source":"src/sentry_planner/map/701_model/map.pcd","align":null,"arrays":[["cost","u1"],["dist","f4"],["slope","u1"]]}

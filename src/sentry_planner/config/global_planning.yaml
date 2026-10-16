@@ -10,24 +10,47 @@
     global_frame: "odom"
     robot_frame: "vehicle"
 
+    # 地图与路径图（留空 = 自动用 <sentry_planner share>/map/701_model/nav_map.bin 与 config/waypoint_graph.yaml）
+    # 地图由 tools/build_nav_map.py 从 701 场地点云离线生成；路径图由 tools/mark_points.py 现场打点生成
+    nav_map_file: ""
+    waypoint_graph_file: ""
+    # true：地图/路径图缺失或解析失败时拒绝运动（真车必须 true；台架/仿真可 -p require_map:=false）
+    require_map: true
+
     # 控制周期与超时
     control_rate_hz: 50.0
     command_timeout: 1.0        # s：决策指令超时则停车
+    odom_timeout: 0.5           # s：里程计中断则停车
+    chassis_timeout: 0.5        # s：底盘(串口)数据中断则停车
+    require_chassis_data: true  # 真车 true；没有底盘反馈的台架/仿真用 -p require_chassis_data:=false
 
     # 位置/朝向控制（长度 m，速度 mm/s，角速度 deg/s）
-    arrive_radius: 0.15         # m：小于该距离不再平移
+    arrive_radius: 0.15         # m：默认到位半径（NavCommand.radius 为 NaN 时用）
     pos_kp: 1.5                 # 1/s
     yaw_kp: 2.0                 # 1/s
+
+    # 路径跟踪（航点图 + 纯跟踪，见 2.md P3.3/P3.4）
+    lookahead_dist: 0.60        # m：前视距离（越大越平滑、越小越贴线；按场地实测定）
+    path_margin: 0.35           # m：规划安全边距（车体半径 + 余量），逐边校验可通行
+
+    # 驻留精度（P3.6）
+    hold_radius: 0.05           # m：MODE_HOLD 的保持死区（3–5 cm 级）
+    hold_gain: 0.8              # 1/s：驻留修正增益（比 pos_kp 小，避免来回蹭）
+    max_hold_speed: 200.0       # mm/s：驻留修正速度上限（地堡/斜坡上只做小幅修正）
 
     # 输出限幅
     max_vx: 1000.0              # mm/s
     max_vy: 1000.0              # mm/s
     max_wz: 360.0               # deg/s
 
+    # 加速度限幅：官方确认「电控不做功率控制」（QA2），100 W 上限只能靠命令变化率兜住
+    # 下面三个默认值 + 上面三个速度上限都是保守占位，必须用 tools/calib_speed.py 在真车上
+    # 实测功率后重标（结果写到 config/speed_limits.yaml，启动时自动覆盖本文件，见 4.md）
+    max_acc_vx: 2000.0          # mm/s^2
+    max_acc_vy: 2000.0          # mm/s^2
+    max_acc_wz: 720.0           # deg/s^2
+
     # 卡住检测
     stuck_cmd_speed: 100.0      # mm/s
     stuck_chassis_speed: 20.0   # mm/s
     stuck_timeout: 2.0          # s
-
-    # 里程计看门狗
-    odom_timeout: 0.5           # s：里程计中断则停车

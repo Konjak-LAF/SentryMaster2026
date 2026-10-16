@@ -13,6 +13,11 @@ def _create_planner_node(context):
         params_file,
     ]
 
+    # 真车实测标定结果（tools/calib_speed.py 生成）：存在时叠加为第二个参数文件，
+    # 只覆盖速度/加速度上限，其余参数仍来自 global_planning.yaml（ROS2 后加载的生效）
+    speed_limits_file = Path(LaunchConfiguration("speed_limits_file").perform(context))
+    if speed_limits_file.is_file():
+        parameters.append(str(speed_limits_file))
 
     return [
         Node(
@@ -36,6 +41,13 @@ def generate_launch_description():
                     [planner_share, "config", "global_planning.yaml"]
                 ),
                 description="Path to the planner parameter file.",
+            ),
+            DeclareLaunchArgument(
+                "speed_limits_file",
+                default_value=PathJoinSubstitution(
+                    [planner_share, "config", "speed_limits.yaml"]
+                ),
+                description="真车功率/速度标定结果（存在则覆盖速度与加速度上限）。",
             ),
             OpaqueFunction(function=_create_planner_node),
         ]

@@ -25,6 +25,8 @@ find_package(ament_cmake REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
+find_package(ament_index_cpp REQUIRED)
+find_package(yaml-cpp REQUIRED)
 find_package(Boost REQUIRED COMPONENTS filesystem system serialization thread date_time regex timer chrono)
 
 # 查找当前目录及子目录中的所有.cpp文件
@@ -57,9 +59,10 @@ ament_target_dependencies(
     pcl_conversions
     tf2_geometry_msgs
     visualization_msgs
+    ament_index_cpp
 )
 
-target_link_libraries(${LIB_NAME} ${OMPL_LIBRARIES} fmt)
+target_link_libraries(${LIB_NAME} ${OMPL_LIBRARIES} fmt yaml-cpp)
 
 # 生成一个可执行文件来封装库 保证launch可以使用Node调用节点
 set(EXE_NAME ${PROJECT_NAME}_node)

@@ -1,0 +1,13 @@
+# speed_limits.yaml —— 真车速度/功率标定结果（tools/calib_speed.py 生成）
+# 生成时间: 2026-10-16 20:02:21   模式: headless 脚本（无底盘）
+# 功率上限: 100 W   分级: vx=200;vx=400;vx=600;vx=800;vx=1000;vy=200;vy=600;vy=1000;wz=60;wz=120;wz=180;wz=360;combo=vx600+wz120
+# 依据: max_vx=default (no power data); max_vy=default (no power data); max_wz=default (no power data); max_acc_vx=default (no power data); max_acc_vy=default (no power data); max_acc_wz=default (no power data)
+# 判限功率触发: 否
+/sentry_planner_node:
+  ros__parameters:
+    max_vx: 800.0
+    max_vy: 800.0
+    max_wz: 180.0
+    max_acc_vx: 1500.0
+    max_acc_vy: 1500.0
+    max_acc_wz: 360.0
