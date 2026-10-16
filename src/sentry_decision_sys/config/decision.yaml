@@ -15,11 +15,35 @@
     command_rate_hz: 10.0
     status_rate_hz: 1.0
 
-    # 姿态取值（1=得分姿态，2 与其等价、统一用 1；3=移动姿态；官方已确认）
-    posture_score: 1
-    posture_move: 3
+    # 任务表（点位 / 阶段时间表 / 得分表）；留空则用本包 share/config/task_table.yaml
+    task_table_file: ""
 
-    # 待机指令（P2 时间窗调度实装前的默认输出）
-    standby_posture: 3
-    standby_nav_mode: 0
-    standby_task_id: 0
+    # 时间轴与数据有效性
+    game_length_sec: 300.0
+    # 官方口径（rulev1.4 §6.6）：比赛开始 game_time=420，每秒减 1，结束时减到 120，
+    # 裁判终止后归 0（0 = 未开始/已终止 -> 待机）
+    game_time_at_start: 420.0
+    game_time_at_end: 120.0
+    referee_timeout: 0.5          # s：裁判数据超时 -> 待机
+    pose_timeout: 0.5             # s：位姿超时 -> 待机
+    serial_fault_timeout: 2.0     # s：串口数据(裁判+底盘)中断超该时长 -> 停车 + 回移动姿态
+
+    # ① 的「离开再进入」最小距离（官方称阈值后续见规则修改，这里留 6 m 余量）
+    leave_supply_dist: 6.0
+
+    # 到位 / 停留判据
+    arrival_hold_sec: 0.3         # 连续保持在半径内多久算到位
+    stay_reset_factor: 1.5        # 停留期间超出 radius*该系数则停留计时清零（地堡斜坡）
+
+    # 姿态（取值 1=得分姿态、3=移动姿态，已官方确认，见 2.md §1.1；这里不再重复配置）
+    posture_switch_dist: 0.6      # 距目标点小于该距离时切到得分姿态
+    posture_min_switch_interval: 5.0   # 姿态切换冷却（规则 5 s）
+    max_posture_sec: 180.0        # 单一姿态累计上限（规则 3 分钟，超出后效果降级）
+    spin_rate: 180.0              # deg/s，小陀螺转速（肉眼可见即可；QA2：电控不做功率控制，
+                                  # 转速越高功率越大，先用保守值，真车实测功率后再调）
+
+    # 末段策略：阶段表跑完后继续刷 ①（先比总分）；**不再刻意多耗能**
+    # （v1.4 起平分判定为「获得最高得分耗时最短者胜」，末段目标是尽快把分拿完）
+    expand_enabled: true
+    minute_entry_window: 3.0      # 「刚过整分钟」判定窗口（s）：① 的停留同步到分钟窗口
+    deadline_margin_sec: 12.0     # 等待分钟窗口时距截止不足该值则直接进入

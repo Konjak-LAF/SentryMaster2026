@@ -1,0 +1,127 @@
+# 任务表（纯数据：赛场点位 + 阶段时间表 + 得分表），由决策节点直接 yaml 解析加载。
+#
+# ⚠ 点位坐标**待打点实测填入**：未填（NaN）时对应阶段会被自动跳过并在日志里告警，
+#   不会把车开去 (0,0)。坐标来源：官方 QA2「具体坐标数据要训练那天才能拿到吗」→「自行标定」，
+#   即必须自己用 rviz/工具量出 odom 系坐标（工具见 tools/ 与 3.md）。
+#
+# 时间轴 t = 比赛开始后的秒数（0~300）。官方 v1.4 §6.6：比赛开始 game_time=420、每秒减 1、
+# 结束减到 120、终止后归 0 —— 决策节点用 t = 420 - game_time 换算，game_time==0 表示
+# 未开始/已终止，此时待机。
+#
+# odom 系：odin 里程计原点（启动点）。x/y 单位 m，yaw_deg 为朝向（.nan = 不约束朝向）。
+
+points:
+  # 补给区（① 每分钟停留 5 s 的点）
+  supply:         {x: .nan, y: .nan, yaw_deg: .nan, radius: 0.25}
+  # 补给区拉出点：必须离 supply ≥ leave_supply_dist（默认 6 m），用于满足「每分钟先离开再进入」
+  supply_pullout: {x: .nan, y: .nan, yaw_deg: .nan, radius: 0.30}
+  # ② 中央高地正中（前 3 分钟、经起伏路段上去，停留 20 s）
+  central_high:   {x: .nan, y: .nan, yaw_deg: .nan, radius: 0.15}
+  # ③ 梯形高地停留点（前 3 分钟、经基地区斜坡上去，停留 20 s）
+  trapezoid_high: {x: .nan, y: .nan, yaw_deg: .nan, radius: 0.15}
+  # ④ 地堡中央（最后 2 分钟、停留 20 s 且保持小陀螺；有斜坡，必须在中央稳定停留）
+  bunker:         {x: .nan, y: .nan, yaw_deg: .nan, radius: 0.15}
+
+# 得分表（已确认：均按得分姿态 ×1.5 计；评级分不参与乘积，故此处不列）
+score:
+  supply: 30          # ① 20×1.5
+  central_high: 150   # ② 100×1.5
+  trapezoid_high: 75  # ③ 50×1.5
+  bunker: 120         # ④ 80×1.5
+  spin_bonus: 30      # ⑤ 20×1.5
+
+# 阶段时间表（顺序执行；t 为「比赛开始后的秒数」，t_end 是截止时间，超时即放弃该阶段）
+#   pre_point        先去的航点（① 用来满足「先离开再进入」）
+#   pre_wait_minute  在前置航点等到分钟窗口开启（t % 60 <= 3）再进入，保证停留落在该分钟内
+#   posture          score=得分姿态(1) / move=移动姿态(3)
+#   spin_travel      行进途中开小陀螺（⑤）；spin_hold 停留期间开小陀螺（④）
+#   counts_as        命中哪个得分项（对应上面 score 的 key）
+# 参考解，**必须按训练场实测调整**（点位距离、坡道耗时都会改变这里的数字）。
+# v1.4 起平分判定是「获得最高得分耗时最短的队伍获胜」→ 排程要追求**尽快把分拿完**
+# （减少无效等待、提高导航速度），而不是刻意多耗能。
+phases:
+  - name: supply_m1
+    task_id: 1
+    t_start: 0.0
+    t_end: 55.0
+    pre_point: supply_pullout
+    point: supply
+    stay_sec: 5.0
+    posture: score
+    counts_as: supply
+
+  - name: supply_m2
+    task_id: 1
+    t_start: 50.0
+    t_end: 120.0
+    pre_point: supply_pullout
+    pre_wait_minute: true
+    point: supply
+    stay_sec: 5.0
+    posture: score
+    counts_as: supply
+
+  - name: central_high
+    task_id: 2
+    t_start: 55.0
+    t_end: 178.0
+    point: central_high
+    stay_sec: 20.0
+    posture: score
+    spin_travel: true
+    counts_as: central_high
+
+  - name: supply_m3
+    task_id: 1
+    t_start: 110.0
+    t_end: 180.0
+    pre_point: supply_pullout
+    pre_wait_minute: true
+    point: supply
+    stay_sec: 5.0
+    posture: score
+    counts_as: supply
+
+  - name: trapezoid_high
+    task_id: 3
+    t_start: 120.0
+    t_end: 178.0
+    point: trapezoid_high
+    stay_sec: 20.0
+    posture: score
+    spin_travel: true
+    counts_as: trapezoid_high
+
+  - name: supply_m4
+    task_id: 1
+    t_start: 165.0
+    t_end: 240.0
+    pre_point: supply_pullout
+    pre_wait_minute: true
+    point: supply
+    stay_sec: 5.0
+    posture: score
+    counts_as: supply
+
+  - name: bunker
+    task_id: 4
+    t_start: 190.0
+    t_end: 297.0
+    point: bunker
+    stay_sec: 20.0
+    posture: score
+    spin_travel: true
+    spin_hold: true
+    counts_as: bunker
+
+  - name: supply_m5
+    task_id: 1
+    t_start: 240.0
+    t_end: 299.0
+    pre_point: supply_pullout
+    point: supply
+    stay_sec: 5.0
+    posture: score
+    counts_as: supply
+
+task_ids: {supply: 1, central_high: 2, trapezoid_high: 3, bunker: 4}
