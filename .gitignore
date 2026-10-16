@@ -2,5 +2,10 @@
 /img
 /log
 /install
+/.vscode
+/rule*.pdf
+# /*.md
+/QA*
+txt
 
 __pycache__
