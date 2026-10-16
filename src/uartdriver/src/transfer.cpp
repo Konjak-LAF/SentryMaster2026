@@ -1,9 +1,10 @@
 #include "transfer.h"
 
 Transfer::Transfer(rclcpp::Node *node, std::shared_ptr<serial::Serial> &_serial_port,
+                   std::shared_ptr<std::mutex> _port_mutex,
                    const std::string &velocity_topic, const std::string &posture_topic,
                    const TransferConfig &_config)
-    : serial_port(_serial_port), config(_config)
+    : serial_port(_serial_port), port_mutex(_port_mutex), config(_config)
 {
     this->node = node;
 
@@ -34,17 +35,32 @@ void Transfer::posture_callback(const PostureMsg::SharedPtr msg){
     posture_received = true;
 }
 
+// 接收链路：校验通过的帧才发布；校验失败的一律丢弃并计数（不发布全零假数据）
 void Transfer::handle_datas(const std::vector<uint8_t> &datas){
+    if(datas.size() < serial_header_size + serial_tail_size8){
+        return;   // 防御性判断：正常路径只会给出带首尾标志的完整帧
+    }
+
     if(datas[1] == serial_referee_id){
         RefereeData referee;
-        referee = trans_uint8_struct<RefereeData>(datas, serial_referee_id, CRCMode::crc16);
+        if(!parse_serial_struct(datas, serial_referee_id, CRCMode::crc16, referee)){
+            ++invalid_referee_frames;
+            RCLCPP_WARN_THROTTLE(node->get_logger(), *node->get_clock(), 1000,
+                "invalid referee frame dropped (size=%zu, dropped=%llu)",
+                datas.size(), static_cast<unsigned long long>(invalid_referee_frames));
+            return;
+        }
         pub_referee_msg(referee);
-        // info_log("recv referee info");
     }else if(datas[1] == serial_move_id) {
         ChassisData chassis;
-        chassis = trans_uint8_struct<ChassisData>(datas, serial_move_id, CRCMode::crc16);
+        if(!parse_serial_struct(datas, serial_move_id, CRCMode::crc16, chassis)){
+            ++invalid_chassis_frames;
+            RCLCPP_WARN_THROTTLE(node->get_logger(), *node->get_clock(), 1000,
+                "invalid chassis frame dropped (size=%zu, dropped=%llu)",
+                datas.size(), static_cast<unsigned long long>(invalid_chassis_frames));
+            return;
+        }
         pub_chassis_msg(chassis);
-        // info_log("recv chassis data");
     }
 }
 
@@ -64,7 +80,7 @@ void Transfer::pub_chassis_msg(const ChassisData &chassis_info){
 }
 
 void Transfer::send_chassis_control(){
-    ChassisControl ctrl{};   // 占位符全部置 0
+    ChassisControl ctrl{};   // 占位符全部置 0（官方已确认永不启用）
     float vx = 0.0f, vy = 0.0f, wz = 0.0f;
     uint8_t posture = config.default_posture;
     bool command_lost = false;
@@ -105,7 +121,8 @@ void Transfer::send_chassis_control(){
 }
 
 bool Transfer::send_serial_packet(const std::vector<uint8_t> &datas, const std::string &tag) {
-    std::lock_guard<std::mutex> lock(write_mutex);
+    // 与节点的 close/open 互斥：串口重连不会打断正在进行的 write（反之亦然）
+    std::lock_guard<std::mutex> lock(*port_mutex);
 
     if (!serial_port) {
         RCLCPP_WARN_THROTTLE(node->get_logger(), *node->get_clock(), 1000,
