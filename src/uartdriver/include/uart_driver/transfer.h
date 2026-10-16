@@ -2,6 +2,8 @@
 #include "common.h"
 #include "serial/serial.h"
 #include "struct_def.hpp"
+#include <cstdint>
+#include <memory>
 #include <mutex>
 
 // 发送链路参数（由节点从 yaml 读出后传入）
@@ -17,6 +19,9 @@ private:
 
     // 引用节点持有的串口句柄：重连会替换对象，引用保证发送端总是拿到最新句柄
     std::shared_ptr<serial::Serial> &serial_port;
+    // 与节点共享的端口互斥：串口 write 与 close/open 之间必须互斥
+    // （read 只在读线程里做，close/open 也由读线程发起，因此 read 无需持锁）
+    std::shared_ptr<std::mutex> port_mutex;
 
     rclcpp::Publisher<RefereeMsg>::SharedPtr referee_puber;
     rclcpp::Publisher<ChassisMsg>::SharedPtr chassis_puber;
@@ -33,7 +38,9 @@ private:
     rclcpp::Time velocity_stamp;
     rclcpp::Time posture_stamp;
 
-    std::mutex write_mutex;            // 串口写互斥（发送侧唯一写者）
+    // 收到的无效帧统计（CRC/帧头帧尾/id 不符 -> 丢弃，不发布）
+    uint64_t invalid_referee_frames = 0;
+    uint64_t invalid_chassis_frames = 0;
 
     bool send_serial_packet(const std::vector<uint8_t> &datas, const std::string &tag);
     void velocity_callback(const VelocityMsg::SharedPtr msg);
@@ -41,6 +48,7 @@ private:
 
 public:
     Transfer(rclcpp::Node *node, std::shared_ptr<serial::Serial> &_serial_port,
+             std::shared_ptr<std::mutex> _port_mutex,
              const std::string &velocity_topic, const std::string &posture_topic,
              const TransferConfig &_config);
 

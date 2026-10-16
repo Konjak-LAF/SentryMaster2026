@@ -81,33 +81,26 @@ inline bool buffer_check_valid(const std::vector<uint8_t> &data, CRC8& checker){
     return crc_chk == crc_val;
 }
 
+// 校验一帧并解出结构体：帧长/帧头/id/帧尾/CRC 任一不符即返回 false，且不写入 out。
+// 注意：绝不能用 memset 后的全零结构体冒充有效数据 —— 上层会把「CRC 失败」当成 game_time=0 的真数据。
+// 用 memcpy 而不是把 data 强转成 T*（data 的载荷未必按 T 对齐，在 ARM 上是未定义行为）。
 template<typename T>
-T trans_uint8_struct(const std::vector<uint8_t> &data, uint8_t id, CRCMode mode){
-    T default_msg;
-    memset(&default_msg, 0, sizeof(default_msg));
-
-    if (data.size() != sizeof(default_msg) + 5){
-        // error_log("data size not match struct!");
-        return  default_msg;
+bool parse_serial_struct(const std::vector<uint8_t> &data, uint8_t id, CRCMode mode, T &out){
+    const size_t tail_size = (mode == CRCMode::crc8) ? serial_tail_size8 : serial_tail_size16;
+    if (data.size() != sizeof(T) + serial_header_size + tail_size){
+        return false;
+    }
+    if (data[0] != serial_info_start || data[1] != id || data.back() != serial_info_end){
+        return false;
     }
 
-    if (mode == CRCMode::crc8){
-        if (buffer_check_valid(data, CRC8::crc8_maxim) &&
-            data[0] == serial_info_start && data[1] == id && data.back() == serial_info_end){
-            T* struct_msg = (T*)(data.data() + serial_header_size);
-            return *struct_msg;
-        }else {
-            return default_msg;
-        }
-    }else if (mode == CRCMode::crc16){
-        if (buffer_check_valid(data, CRC16::crc16_ccitt) &&
-            data[0] == serial_info_start && data[1] == id && data.back() == serial_info_end){
-            T* struct_msg = (T*)(data.data() + serial_header_size);
-            return *struct_msg;
-        }else {
-            return default_msg;
-        }
-    }else{
-        return default_msg;
+    const bool crc_ok = (mode == CRCMode::crc8)
+        ? buffer_check_valid(data, CRC8::crc8_maxim)
+        : buffer_check_valid(data, CRC16::crc16_ccitt);
+    if (!crc_ok){
+        return false;
     }
+
+    memcpy(&out, data.data() + serial_header_size, sizeof(T));
+    return true;
 }

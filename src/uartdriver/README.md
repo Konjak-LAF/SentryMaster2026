@@ -17,6 +17,9 @@
 | `0x11` | 裁判系统（`game_time`、`sentry_posture`） | `/referee_data`（`rm_msgs/RefereeData`） |
 | `0x16` | 底盘数据（`vx`、`vy`、`wz`） | `/chassis_data`（`rm_msgs/ChassisData`） |
 
+接收侧会校验**帧长 + 帧头 + id + 帧尾 + CRC16**，任一项不符即**丢弃该帧并计数**（1 s 一次节流告警，日志里能看到累计丢弃数）；
+不会把校验失败的帧变成 `game_time=0` 之类的**假数据**发布出去。
+
 ### 发送（ROS2 → 电控）
 
 | 订阅话题 | 消息 | 串口包 id |
@@ -33,6 +36,7 @@
 - `posture_timeout`（默认 1.0 s）：超时未收到姿态指令 → 回到 `default_posture`（移动姿态），避免决策掉线后卡在得分姿态。
 
 串口打开失败不再让节点退出：读线程每 2 s 重连一次（无硬件时节点照常启动、话题照常建立，方便检录）。
+发送线程的 `write` 与读线程的 `close/open` 共用一把端口互斥锁，重连不会打断正在进行的写或反之；重连成功后立刻恢复发送。
 
 ## 参数（config/driver_config.yaml）
 

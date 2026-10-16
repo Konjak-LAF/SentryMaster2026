@@ -72,6 +72,7 @@ void UARTDriverNode::init_node(){
     }
 
     // 打开串口失败不致命：读线程会周期性重连，保证无硬件时节点仍能启动
+    port_mutex = std::make_shared<std::mutex>();
     if(!try_open_serial()){
         error_log("failed to open serial port, will keep retrying in background");
     }
@@ -81,8 +82,8 @@ void UARTDriverNode::init_node(){
     transfer_config.posture_timeout = posture_timeout;
     transfer_config.default_posture = static_cast<uint8_t>(default_posture);
 
-    uart_transfer = std::make_shared<Transfer>(this, serial_port, velocity_topic, posture_topic,
-                                               transfer_config);
+    uart_transfer = std::make_shared<Transfer>(this, serial_port, port_mutex,
+                                               velocity_topic, posture_topic, transfer_config);
     read_thread = std::thread(&UARTDriverNode::read_from_port, this);
     start_send_timer(send_rate_hz);
 
@@ -114,6 +115,9 @@ bool UARTDriverNode::try_open_serial(){
         error_log("no serial port name configured (serial_name is empty)");
         return false;
     }
+
+    // 与发送线程的 write 互斥：替换句柄时不能让发送端拿到半开状态的端口
+    std::lock_guard<std::mutex> lock(*port_mutex);
 
     try{
         auto port = std::make_shared<serial::Serial>(
@@ -200,20 +204,19 @@ void UARTDriverNode::read_from_port() {
             if (no_serial_data > 5) {
                 error_log("no serial data....");
                 no_serial_data = 0;
-                is_serial_normal = false;
-                serial_port->close();
+                close_serial();
             }
         } catch (const std::exception &ex) {
             error_log("Error while receiving data: ", ex.what());
-            is_serial_normal = false;
-            if (serial_port && serial_port->isOpen()) {
-                serial_port->close();
-            }
+            close_serial();
         }
     }
 }
 
-bool UARTDriverNode::reopen_port(){
+// 关闭并释放串口句柄（持锁，避免打断发送线程正在进行的 write）
+void UARTDriverNode::close_serial(){
+    std::lock_guard<std::mutex> lock(*port_mutex);
+    is_serial_normal = false;
     if (serial_port && serial_port->isOpen()) {
         try{
             serial_port->close();
@@ -222,6 +225,10 @@ bool UARTDriverNode::reopen_port(){
         }
     }
     serial_port = nullptr;
+}
+
+bool UARTDriverNode::reopen_port(){
+    close_serial();
 
     if(!try_open_serial()){
         error_log("Attempting to reopen", serial_name, "failed, retry later");
