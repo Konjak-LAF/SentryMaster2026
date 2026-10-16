@@ -20,3 +20,4 @@ float32 y           # 目标点 y, m（global_frame 系）
 float32 yaw         # 目标朝向 rad；NaN 表示不约束朝向
 float32 spin_rate   # 小陀螺角速度 deg/s（逆时针为正）；0 表示不转
 float32 stay_sec    # mode=HOLD 的期望保持时长 s（供导航侧超时保护）
+float32 radius      # 到位/保持半径 m（该点位的判定半径）；NaN = 用导航默认 arrive_radius
