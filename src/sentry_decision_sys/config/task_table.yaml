@@ -1,5 +1,18 @@
 # 任务表（纯数据：赛场点位 + 阶段时间表 + 得分表），由决策节点直接 yaml 解析加载。
 #
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║ 本队策略（2026-10-17 定）：只做 ①②⑤，放弃 ③④                                ║
+# ║   开局：补给区（① 第 1 分钟）→ 中央高地（② 停 20 s，去程小陀螺吃 ⑤）        ║
+# ║         → 之后每分钟回补给区停 5 s（①）                                      ║
+# ║   放弃：③ 梯形高地、④ 地堡（连带少两趟 ⑤）                                   ║
+# ║   预期：①×4~5（120~150）＋ ② 150 ＋ ⑤ 30 = **300~330**                       ║
+# ║         ② 的去回程会吃掉一个分钟窗口；回来得早就能多吃一次 ①（自适应）       ║
+# ║   对比原全做方案 585（①5×30+②150+③75+④120+⑤3×30）：少 255~285，              ║
+# ║         换来不爬两处坡、整局时间宽裕、失误面更小                              ║
+# ║   注意：① 每分钟只计一次 —— 调度器按「分钟序号」去重（同一分钟内第二个 ①     ║
+# ║         阶段即使跑完也不重复加分，见 scheduler._award）                       ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+#
 # ⚠ 点位坐标**待打点实测填入**：未填（NaN）时对应阶段会被自动跳过并在日志里告警，
 #   不会把车开去 (0,0)。坐标来源：官方 QA2「具体坐标数据要训练那天才能拿到吗」→「自行标定」，
 #   即必须自己用 rviz/工具量出 odom 系坐标（工具见 tools/ 与 3.md）。
@@ -17,29 +30,29 @@ points:
   supply_pullout: {x: .nan, y: .nan, yaw_deg: .nan, radius: 0.30}
   # ② 中央高地正中（前 3 分钟、经起伏路段上去，停留 20 s）
   central_high:   {x: .nan, y: .nan, yaw_deg: .nan, radius: 0.15}
-  # ③ 梯形高地停留点（前 3 分钟、经基地区斜坡上去，停留 20 s）
+  # ③ 梯形高地（**本方案不做**；保留作地图参考，现场可不打点）
   trapezoid_high: {x: .nan, y: .nan, yaw_deg: .nan, radius: 0.15}
-  # ④ 地堡中央（最后 2 分钟、停留 20 s 且保持小陀螺；有斜坡，必须在中央稳定停留）
+  # ④ 地堡中央（**本方案不做**；保留作地图参考，现场可不打点）
   bunker:         {x: .nan, y: .nan, yaw_deg: .nan, radius: 0.15}
 
 # 得分表（已确认：均按得分姿态 ×1.5 计；评级分不参与乘积，故此处不列）
+# 只列本方案用到的项；③④ 已从阶段表移除，不再计分
 score:
   supply: 30          # ① 20×1.5
   central_high: 150   # ② 100×1.5
-  trapezoid_high: 75  # ③ 50×1.5
-  bunker: 120         # ④ 80×1.5
-  spin_bonus: 30      # ⑤ 20×1.5
+  spin_bonus: 30      # ⑤ 20×1.5（每趟从补给区出发、开小陀螺到达 ②/③/④ 计一次）
 
 # 阶段时间表（顺序执行；t 为「比赛开始后的秒数」，t_end 是截止时间，超时即放弃该阶段）
 #   pre_point        先去的航点（① 用来满足「先离开再进入」）
 #   pre_wait_minute  在前置航点等到分钟窗口开启（t % 60 <= 3）再进入，保证停留落在该分钟内
-#   posture          score=得分姿态(1) / move=移动姿态(3)
-#   spin_travel      行进途中开小陀螺（⑤）；spin_hold 停留期间开小陀螺（④）
+#   posture          score=得分姿态(1)：行进用移动姿态，距目标 <0.6 m 切得分姿态并在停留期间保持
+#   spin_travel      行进途中开小陀螺（⑤）；spin_hold 停留期间开小陀螺（本方案已无 ④）
 #   counts_as        命中哪个得分项（对应上面 score 的 key）
 # 参考解，**必须按训练场实测调整**（点位距离、坡道耗时都会改变这里的数字）。
-# v1.4 起平分判定是「获得最高得分耗时最短的队伍获胜」→ 排程要追求**尽快把分拿完**
-# （减少无效等待、提高导航速度），而不是刻意多耗能。
+# v1.4 起平分判定是「获得最高得分耗时最短的队伍获胜」→ 排程追求**尽快把分拿完**。
 phases:
+  # ① 第 1 分钟：先去拉出点（保证「先离开 ≥6 m」），再进补给区停 5 s
+  #   （若启动点本来就离补给点 ≥6 m，可删掉 pre_point 这行省几秒；启动区离补给区很近时别删）
   - name: supply_m1
     task_id: 1
     t_start: 0.0
@@ -50,20 +63,11 @@ phases:
     posture: score
     counts_as: supply
 
-  - name: supply_m2
-    task_id: 1
-    t_start: 50.0
-    t_end: 120.0
-    pre_point: supply_pullout
-    pre_wait_minute: true
-    point: supply
-    stay_sec: 5.0
-    posture: score
-    counts_as: supply
-
+  # ② 中央高地（规则：前 3 分钟内完成 20 s 停留，且必须经起伏路段上去 → 路径图那条链要走起伏段）
+  #   去程开小陀螺吃 ⑤（斜坡/起伏路段由导航的禁小陀螺区自动关掉）
   - name: central_high
     task_id: 2
-    t_start: 55.0
+    t_start: 5.0
     t_end: 178.0
     point: central_high
     stay_sec: 20.0
@@ -71,31 +75,36 @@ phases:
     spin_travel: true
     counts_as: central_high
 
+  # ③④ 不做。下面 4 个 ① 阶段吃掉剩余分钟：
+  #   每个阶段都先去拉出点等「分钟窗口」，再进补给区停 5 s；
+  #   t_end 给足余量，赶不上整分钟时会在「截止临近」时直接进去（仍落在该分钟内）。
+  #   同一分钟内不会重复计分（scheduler 按分钟去重），所以阶段多留一个也不会虚报分数。
+  - name: supply_m2
+    task_id: 1
+    t_start: 50.0
+    t_end: 140.0
+    pre_point: supply_pullout
+    pre_wait_minute: true
+    point: supply
+    stay_sec: 5.0
+    posture: score
+    counts_as: supply
+
   - name: supply_m3
     task_id: 1
     t_start: 110.0
-    t_end: 180.0
+    t_end: 200.0
     pre_point: supply_pullout
     pre_wait_minute: true
     point: supply
     stay_sec: 5.0
     posture: score
     counts_as: supply
-
-  - name: trapezoid_high
-    task_id: 3
-    t_start: 120.0
-    t_end: 178.0
-    point: trapezoid_high
-    stay_sec: 20.0
-    posture: score
-    spin_travel: true
-    counts_as: trapezoid_high
 
   - name: supply_m4
     task_id: 1
-    t_start: 165.0
-    t_end: 240.0
+    t_start: 170.0
+    t_end: 260.0
     pre_point: supply_pullout
     pre_wait_minute: true
     point: supply
@@ -103,25 +112,15 @@ phases:
     posture: score
     counts_as: supply
 
-  - name: bunker
-    task_id: 4
-    t_start: 190.0
-    t_end: 297.0
-    point: bunker
-    stay_sec: 20.0
-    posture: score
-    spin_travel: true
-    spin_hold: true
-    counts_as: bunker
-
   - name: supply_m5
     task_id: 1
-    t_start: 240.0
+    t_start: 230.0
     t_end: 299.0
     pre_point: supply_pullout
+    pre_wait_minute: true
     point: supply
     stay_sec: 5.0
     posture: score
     counts_as: supply
 
-task_ids: {supply: 1, central_high: 2, trapezoid_high: 3, bunker: 4}
+task_ids: {supply: 1, central_high: 2}

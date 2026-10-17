@@ -175,19 +175,33 @@ fi
 
 TABLE="$WORKSPACE/src/sentry_decision_sys/config/task_table.yaml"
 if [ -f "$TABLE" ]; then
-    STATS="$(python3 - <<PY 2>/dev/null
-import math, yaml
-d = yaml.safe_load(open("$TABLE")) or {}
+    # 只检查「被 phases 引用」的点位：本策略只做 ①②⑤，③④ 留着作参考但不需要打点
+    STATS="$(python3 - "$TABLE" <<'PY' 2>/dev/null
+import math, sys, yaml
+
+d = yaml.safe_load(open(sys.argv[1])) or {}
 pts = d.get("points") or {}
-nan = [k for k, v in pts.items() if v is None or (isinstance(v.get("x"), float) and math.isnan(v["x"]))]
-print(f"{len(pts)}|{len(nan)}|{','.join(nan)}")
+used = set()
+for ph in d.get("phases") or []:
+    for key in ("point", "pre_point"):
+        if ph.get(key):
+            used.add(ph[key])
+need = [k for k in sorted(used) if k in pts]
+def is_nan(value):
+    v = (pts.get(value) or {}).get("x")
+    return v is None or (isinstance(v, float) and math.isnan(v))
+missing = [k for k in need if is_nan(k)]
+unused = [k for k in pts if k not in used]
+print(f"{len(need)}|{len(missing)}|{','.join(missing)}|{','.join(unused)}")
 PY
 )"
-    TOTAL="${STATS%%|*}"; REST="${STATS#*|}"; NAN_N="${REST%%|*}"; NAN_LIST="${REST#*|}"
+    TOTAL="${STATS%%|*}"; REST="${STATS#*|}"
+    NAN_N="${REST%%|*}"; REST="${REST#*|}"
+    NAN_LIST="${REST%%|*}"; UNUSED="${REST#*|}"
     if [ "${NAN_N:-1}" -eq 0 ]; then
-        ok "task_table" "${TOTAL} 个点位已全部打点"
+        ok "task_table" "阶段引用的 ${TOTAL} 个点位已全部打点${UNUSED:+（未使用、不用打点: $UNUSED）}"
     else
-        warn "task_table" "${NAN_N}/${TOTAL} 个点位未打点（.nan）:$NAN_LIST —— 对应阶段会被跳过，现场必须打点"
+        warn "task_table" "${NAN_N}/${TOTAL} 个**被阶段引用**的点位未打点（.nan）:$NAN_LIST —— 对应阶段会被跳过，现场必须打点${UNUSED:+（未使用: $UNUSED）}"
     fi
 else
     bad "task_table" "缺 task_table.yaml"

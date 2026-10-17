@@ -145,6 +145,7 @@ class TaskScheduler:
         self.expected_score: float = 0.0
         self.notes: List[str] = []                # 最近的事件（供日志）
         self.max_dist_supply: float = 0.0         # 本分钟窗口内离补给点的最远距离
+        self.last_supply_minute: int = -1          # 已计分过的分钟序号（规则：① 每分钟只算一次）
         self.last_pose: Optional[Tuple[float, float, float]] = None
         self.expand_active: bool = False
         self.expand_cycle: int = 0
@@ -245,7 +246,7 @@ class TaskScheduler:
         self._enter_phase(Phase(
             name=f"expand_margin_{self.expand_cycle}",
             t_start=0.0,
-            t_end=1e9,
+            t_end=self.config.game_length_sec,   # 不许跑过比赛时长（否则最后几秒还在往补给区跑）
             point=self.config.supply_point,
             pre_point=self.config.pullout_point,
             stay_sec=5.0,
@@ -262,13 +263,13 @@ class TaskScheduler:
 
         if t > phase.t_end:
             self._note(f"abort {phase.name}: 超时未完成 (t={t:.1f} > {phase.t_end:.1f})")
-            self._finish_phase(award=False)
+            self._finish_phase(award=False, t=t)
             return Decision(mode=MODE_STOP, posture=self._desired_posture(t, x, y))
 
         target_name = phase.point if self.sub_state in (TRAVEL, HOLD) else phase.pre_point
         if target_name is None:
             self._note(f"abort {phase.name}: 目标点缺失")
-            self._finish_phase(award=False)
+            self._finish_phase(award=False, t=t)
             return Decision(mode=MODE_STOP, posture=self._desired_posture(t, x, y))
         target = self.points[target_name]
 
@@ -295,7 +296,7 @@ class TaskScheduler:
 
             if self.hold_elapsed >= phase.stay_sec:
                 self._note(f"{phase.name}: 停留完成 {self.hold_elapsed:.1f}s >= {phase.stay_sec:.1f}s")
-                self._finish_phase(award=True)
+                self._finish_phase(award=True, t=t)
 
         # 分钟同步：在前置航点等到「刚过整分钟」再进入目标区，保证停留落在该分钟内
         if self.sub_state == WAIT:
@@ -338,25 +339,35 @@ class TaskScheduler:
             self.hold_elapsed = 0.0
         else:
             self._note(f"{phase.name}: 到达 {target_name}（无需停留）")
-            self._finish_phase(award=True)
+            self._finish_phase(award=True, t=t)
 
-    def _finish_phase(self, award: bool) -> None:
+    def _finish_phase(self, award: bool, t: float) -> None:
         phase = self.phase
         assert phase is not None
         if award and phase.counts_as:
-            self._award(phase)
+            self._award(phase, t)
         self.phase_finished = True
 
     # ------------------------------------------------------------------ 得分记账
-    def _award(self, phase: Phase) -> None:
+    def _award(self, phase: Phase, t: float) -> None:
         item = phase.counts_as
         config = self.config
+        if t > config.game_length_sec + 0.5:
+            # 裁判钟已过比赛时长（420→120 走完）；之后即使阶段还在跑也不再记分（0.5 s 容差留给帧量化）
+            self._note(f"不计分：t={t:.1f}s 已超过比赛时长 {config.game_length_sec:.0f}s")
+            return
         if item == config.supply_point:
             if self.max_dist_supply < config.leave_supply_dist:
                 self._note(f"①无效：本分钟最远离补给点 {self.max_dist_supply:.2f} m "
                            f"< {config.leave_supply_dist:.2f} m，不计分")
                 return
-            self._note(f"①有效：最远离补给点 {self.max_dist_supply:.2f} m")
+            minute = int(t // 60.0)
+            if minute == self.last_supply_minute:
+                # 规则：每分钟只算一次；阶段表里多留的 ① 阶段遇到时间漂移时不应重复计分
+                self._note(f"①无效：第 {minute + 1} 分钟已经计过分（规则每分钟一次）")
+                return
+            self.last_supply_minute = minute
+            self._note(f"①有效（第 {minute + 1} 分钟）：最远离补给点 {self.max_dist_supply:.2f} m")
         points = float(config.score.get(item or "", 0.0))
         self.awards[item] = self.awards.get(item, 0) + 1
         self.expected_score += points
