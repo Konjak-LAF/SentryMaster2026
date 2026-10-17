@@ -39,7 +39,7 @@ SerialStruct ChassisData{
 };
 
 // 发送底盘数据包
-// ph 标注的变量为占位符，全部置0即可
+// ph 标注的变量为占位符：**ph1 必须固定填 4**（电控 2026-10-17 要求），其余占位符置 0
 const uint8_t chassis_control_id = 0x20;
 SerialStruct ChassisControl{
     float vx;

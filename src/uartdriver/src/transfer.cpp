@@ -80,7 +80,7 @@ void Transfer::pub_chassis_msg(const ChassisData &chassis_info){
 }
 
 void Transfer::send_chassis_control(){
-    ChassisControl ctrl{};   // 占位符全部置 0（官方已确认永不启用）
+    ChassisControl ctrl{};   // 占位符默认 0；ph1 由电控要求固定为 4（见下方赋值）
     float vx = 0.0f, vy = 0.0f, wz = 0.0f;
     uint8_t posture = config.default_posture;
     bool command_lost = false;
@@ -113,6 +113,7 @@ void Transfer::send_chassis_control(){
     ctrl.vx = vx;
     ctrl.vy = vy;
     ctrl.wz = wz;
+    ctrl.ph1 = 4;                 // 电控要求：该占位字节固定为 4（2026-10-17 通知），其余占位字节保持 0
     ctrl.sentry_posture = posture;
 
     send_serial_packet(

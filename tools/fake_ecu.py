@@ -40,7 +40,7 @@
     0x20 ChassisControl payload 17B -> 帧 22B        struct_def.hpp:43-54
 
     ChassisControl = float vx, float vy, float wz, u8 ph1, u8 sentry_posture, u8 ph2, u8 ph3, u8 ph4
-    即 3*4 + 5 = 17 B（`ph` 占位全部置 0，见 struct_def.hpp:43-54 / transfer.cpp:113-116）。
+    即 3*4 + 5 = 17 B（`ph1` 固定为 4（电控 2026-10-17 要求），其余占位置 0；见 struct_def.hpp:43-54）。
 
 用法
 ----
@@ -86,6 +86,8 @@ ID_CHASSIS_DATA = 0x16                                 # struct_def.hpp:27
 ID_CHASSIS_CONTROL = 0x20                              # struct_def.hpp:43
 
 PAYLOAD_SIZE = {ID_REFEREE: 25, ID_CHASSIS_DATA: 24, ID_CHASSIS_CONTROL: 17}
+# 电控 2026-10-17 要求：控制帧里的 ph1 占位字节固定为 4（其余占位字节为 0）
+PH1_EXPECTED = 4                                       # struct_def.hpp:43-54 / transfer.cpp
 FRAME_SIZE = {k: SERIAL_HEADER_SIZE + n + SERIAL_TAIL_SIZE16 for k, n in PAYLOAD_SIZE.items()}
 
 # packed struct 的等价 small-endian 打包格式（x86 / ARM 小端一致）
@@ -219,7 +221,7 @@ class FrameParser:
 def validate_chassis_control(frame):
     """校验并解出 ChassisControl（镜像 parse_serial_struct + buffer_check_valid，crc16 模式）。
 
-    返回 (ok, reason, (vx, vy, wz, posture) 或 None, crc_fallback_ok)
+    返回 (ok, reason, (vx, vy, wz, posture, ph1) 或 None, crc_fallback_ok)
     """
     if len(frame) != FRAME_SIZE[ID_CHASSIS_CONTROL]:
         return False, "size", None, False
@@ -234,8 +236,9 @@ def validate_chassis_control(frame):
         fallback = True
         if crc_chk != crc_val:
             return False, "crc", None, False
-    vx, vy, wz, _ph1, posture, _ph2, _ph3, _ph4 = struct.unpack_from(FMT_CHASSIS_CONTROL, frame, 2)
-    return True, "ok", (vx, vy, wz, posture), fallback
+    vx, vy, wz, ph1, posture, _ph2, _ph3, _ph4 = struct.unpack_from(
+        FMT_CHASSIS_CONTROL, frame, 2)
+    return True, "ok", (vx, vy, wz, posture, ph1), fallback
 
 
 def f32_le_bytes(v):
@@ -341,6 +344,8 @@ class FakeEcu:
         self.sign_latest_ok = 0
         self.sign_max_dev = 0.0
         self.sign_examples = []
+        self.ph1_bad = 0                 # 控制帧 ph1 != PH1_EXPECTED(4) 的帧数
+        self.last_ph1 = None
         self.chassis_msgs = []
         self.poison_seen = 0
         self.chassis_min = None
@@ -604,13 +609,19 @@ class FakeEcu:
             if self.t0 is None:
                 self.t0 = now
                 self.log("T0 锚点：收到第一帧驱动控制帧（%s）", frame.hex(" "))
-            vx, vy, wz, posture = vals
+            vx, vy, wz, posture, ph1 = vals
             s = Sample(now, vx, vy, wz, posture, len(frame), esc, "ok")
             self.good.append(s)
             self.frames.append(s)
             if esc:
                 self.rx_esc_frames += 1
                 self.rx_esc_bytes += esc
+            self.last_ph1 = ph1
+            if ph1 != PH1_EXPECTED:
+                self.ph1_bad += 1
+                if self.ph1_bad <= 3:
+                    self.log("ph1 不符：收到 %d，电控要求 %d（帧 %s）",
+                             ph1, PH1_EXPECTED, frame.hex(" "))
             self.sign_check_frame(s)
             self.watchdog_scan(s)
         else:
@@ -826,6 +837,9 @@ class FakeEcu:
         if self.cmds_with_escape:
             add("escape_path", self.rx_esc_bytes > 0,
                 f"指令侧有 {self.cmds_with_escape} 帧含待转义字节 -> 实测收到 {self.rx_esc_bytes}B 转义数据")
+        add("ph1_constant", self.ph1_bad == 0 and self.last_ph1 is not None,
+            f"ph1 必须恒为 {PH1_EXPECTED}（电控 2026-10-17 要求）；不符 {self.ph1_bad} 帧，"
+            f"最近值={self.last_ph1}")
         if self.args.sign_check:
             add("sign_check", self.sign_mismatch == 0 and self.sign_checks >= 20,
                 f"checked={self.sign_checks} mismatch={self.sign_mismatch} "
@@ -985,7 +999,7 @@ def run_selftest():
                               for k, (p, f) in sizes.items()),
           f"packed 载荷/帧: " + ", ".join(f"{k}:{p}B->{f}B" for k, (p, f) in sizes.items()))
 
-    ctrl = struct.pack(FMT_CHASSIS_CONTROL, 300.0, -120.0, 45.0, 0, 1, 0, 0, 0)
+    ctrl = struct.pack(FMT_CHASSIS_CONTROL, 300.0, -120.0, 45.0, PH1_EXPECTED, 1, 0, 0, 0)
     escaped, raw, n_esc = build_frame(ID_CHASSIS_CONTROL, ctrl)
     check("frame_20_bytes", len(raw) == 22 and raw[0] == 0x7D and raw[1] == 0x20 and raw[-1] == 0x7E,
           f"raw={raw.hex(' ')}  (len={len(raw)})")
@@ -994,10 +1008,15 @@ def run_selftest():
           f"crc16(id+payload)=0x{crc_expect:04X} -> 帧内 LE 字节 {raw[19:21].hex(' ')}")
 
     r_ok, r_why, vals, fb = validate_chassis_control(raw)
-    check("roundtrip_parse", r_ok and vals == (300.0, -120.0, 45.0, 1) and not fb,
-          f"解析回 (vx,vy,wz,posture)={vals} reason={r_why} crc_fallback={fb}")
+    check("roundtrip_parse", r_ok and vals == (300.0, -120.0, 45.0, 1, PH1_EXPECTED) and not fb,
+          f"解析回 (vx,vy,wz,posture,ph1)={vals} reason={r_why} crc_fallback={fb}")
+    zero_ph1 = build_frame(ID_CHASSIS_CONTROL,
+                           struct.pack(FMT_CHASSIS_CONTROL, 0.0, 0.0, 0.0, 0, 3, 0, 0, 0))[0]
+    ok_z, _why_z, vals_z, _ = validate_chassis_control(zero_ph1)
+    check("ph1_detect", ok_z and vals_z[4] == 0 and PH1_EXPECTED == 4,
+          f"ph1=0 时解析为 {vals_z[4]}（≠{PH1_EXPECTED}）-> 台架 ph1_constant 断言会 FAIL，可抓回归")
 
-    esc_ctrl = struct.pack(FMT_CHASSIS_CONTROL, *ESCAPE_PRESET, 0, 1, 0, 0, 0)
+    esc_ctrl = struct.pack(FMT_CHASSIS_CONTROL, *ESCAPE_PRESET, PH1_EXPECTED, 1, 0, 0, 0)
     esc_escaped, esc_raw, esc_n = build_frame(ID_CHASSIS_CONTROL, esc_ctrl)
     parser = FrameParser()
     got = parser.feed(esc_escaped)

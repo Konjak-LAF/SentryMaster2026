@@ -28,7 +28,7 @@
 | `/sentry/posture_command` | `rm_msgs/PostureCommand`：姿态（1=得分姿态，2 等价；3=移动姿态） | `0x20` |
 
 发送由 `send_rate_hz` 定时器周期完成（默认 50 Hz）：把最新的速度与姿态填入 `ChassisControl`
-（占位字节置 0），再按 `0x7D | id | payload | CRC16 | 0x7E` 组帧，帧内 `0x7D/0x7E/0x7F` 做转义后写入串口。
+（`ph1` 固定填 **4**（电控 2026-10-17 要求），其余占位字节置 0），再按 `0x7D | id | payload | CRC16 | 0x7E` 组帧，帧内 `0x7D/0x7E/0x7F` 做转义后写入串口。
 
 两个看门狗（都在发送定时器里判定）：
 
