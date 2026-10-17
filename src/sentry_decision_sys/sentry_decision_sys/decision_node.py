@@ -41,6 +41,8 @@ class DecisionNode(Node):
         "task_table_file": "",
         # 时间轴与数据有效性
         "game_length_sec": 300.0,
+        # 发车门控：必须看到裁判钟在走（t 增加）才执行阶段表；准备阶段广播的静态 420 不发车
+        "arm_requires_counting": True,
         # 官方口径（v1.4 §6.6）：比赛开始 game_time=420，每秒减 1，结束时减到 120，
         # 裁判终止后归 0 —— 所以 t = game_time_at_start - game_time
         "game_time_at_start": 420.0,
@@ -110,6 +112,7 @@ class DecisionNode(Node):
             max_posture_sec=float(param("max_posture_sec").value),
             spin_rate=float(param("spin_rate").value),
             game_length_sec=self.game_length_sec,
+            arm_requires_counting=bool(param("arm_requires_counting").value),
             expand_enabled=bool(param("expand_enabled").value),
             minute_entry_window=float(param("minute_entry_window").value),
             deadline_margin_sec=float(param("deadline_margin_sec").value),

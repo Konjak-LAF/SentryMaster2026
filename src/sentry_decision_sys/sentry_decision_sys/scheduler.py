@@ -89,6 +89,9 @@ class SchedulerConfig:
     max_posture_sec: float = 180.0        # 单一姿态累计上限（规则 3 分钟，超出后效果降级）
     spin_rate: float = 360.0              # 小陀螺转速 deg/s
     game_length_sec: float = 300.0
+    # 发车门控：必须看到「裁判钟在走」（t 在增加）才认为比赛真的开始了。
+    # 准备阶段若裁判已广播 game_time=420（t=0 但不动），绝不能因此发车。
+    arm_requires_counting: bool = True
     expand_enabled: bool = True           # 末段策略：按分钟同步循环刷 ①
     minute_entry_window: float = 3.0      # 「刚过整分钟」的判定窗口（秒）
     deadline_margin_sec: float = 12.0     # 等待期间距截止时间不足则直接进入
@@ -147,6 +150,9 @@ class TaskScheduler:
         self.max_dist_supply: float = 0.0         # 本分钟窗口内离补给点的最远距离
         self.last_supply_minute: int = -1          # 已计分过的分钟序号（规则：① 每分钟只算一次）
         self.last_pose: Optional[Tuple[float, float, float]] = None
+        self.last_t: Optional[float] = None       # 上一 tick 的 t（判「时钟在走」）
+        self.clock_counting: bool = False         # 是否已观察到比赛钟在走（发车门控）
+        self.arm_note_printed: bool = False
         self.expand_active: bool = False
         self.expand_cycle: int = 0
 
@@ -159,6 +165,19 @@ class TaskScheduler:
 
         if t is None or pose is None:
             self.posture_time[self.posture] += dt
+            return Decision(mode=MODE_STOP, posture=self.posture)
+
+        # 发车门控：准备阶段裁判可能已经在广播 game_time=420（t=0 但钟没走），此时必须待机。
+        # 只有观察到 t 在增加（钟真的在走）才 arm；arm 之后不再撤销（比赛中途裁判帧抖动
+        # 不应让车反复停走；串口长时间中断另有故障降级）。
+        if self.last_t is not None and t > self.last_t + 1e-6:
+            self.clock_counting = True
+        self.last_t = t
+        if self.config.arm_requires_counting and not self.clock_counting:
+            self.posture_time[self.posture] += dt
+            if not self.arm_note_printed:
+                self.arm_note_printed = True
+                self._note("等待发车：裁判钟还没开始走（准备阶段）—— 保持零速 + 移动姿态")
             return Decision(mode=MODE_STOP, posture=self.posture)
 
         self.last_pose = pose
